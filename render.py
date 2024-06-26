@@ -16,6 +16,7 @@ from arguments import GroupParams, ModelParams, PipelineParams, get_combined_arg
 from gaussian_renderer import GaussianModel, render
 from gs_ir import recon_occlusion, IrradianceVolumes
 from pbr import CubemapLight, get_brdf_lut, pbr_shading
+from pbr.shade import get_material
 from scene import Scene
 from utils.general_utils import safe_state
 from utils.image_utils import viridis_cmap, psnr as get_psnr
@@ -75,7 +76,6 @@ def render_set(
         (canonical_rays[:, None, :] * c2w[None, :3, :3]).sum(dim=-1).reshape(H, W, 3)  # [HW, 3, 3]
     )  # [H, W, 3]
     norm = torch.norm(canonical_rays, p=2, dim=-1).reshape(H, W, 1)
-
 
     psnr_avg = 0.0
     ssim_avg = 0.0
@@ -155,8 +155,16 @@ def render_set(
 
         if pbr:
             albedo_map = rendering_result["albedo_map"]  # [3, H, W]
-            roughness_map = rendering_result["roughness_map"]  # [1, H, W]
-            metallic_map = rendering_result["metallic_map"]  # [1, H, W]
+            class_feature = rendering_result["roughness_map"]  # [1, H, W]
+            class_mask = rendering_result["metallic_map"]  # [1, H, W]
+
+            assert metallic is not None
+            roughness_map, specular_albedo, metallic_map = get_material(
+                class_feature=class_feature.permute(1, 2, 0),  # [1, H, W] -> [H, W, 1]
+                class_mask=class_mask.permute(1, 2, 0),  # [1, H, W] -> [H, W, 1]
+                height=H,
+                width=W
+            )
             pbr_result = pbr_shading(
                 light=light,
                 normals=normal_map.permute(1, 2, 0),  # [H, W, 3]
@@ -165,6 +173,7 @@ def render_set(
                 albedo=albedo_map.permute(1, 2, 0),  # [H, W, 3]
                 roughness=roughness_map.permute(1, 2, 0),  # [H, W, 1]
                 metallic=metallic_map.permute(1, 2, 0) if metallic else None,  # [H, W, 1]
+                specular_albedo=specular_albedo.permute(1, 2, 0),
                 tone=tone,
                 gamma=gamma,
                 occlusion=occlusion,
@@ -180,16 +189,22 @@ def render_set(
                 render_rgb,
                 background,
             )
+            # print(np.shape(metallic_map))
+            # print(np.shape(occlusion))
+            # print(np.shape(irradiance))
             brdf_map = torch.cat(
                 [
+                    render_rgb,
                     albedo_map,
                     torch.tile(roughness_map, (3, 1, 1)),
                     torch.tile(metallic_map, (3, 1, 1)),
+                    torch.tile(occlusion.permute(2, 0, 1), (3, 1, 1)),
+                    # torch.tile(irradiance.permute(2, 0, 1), (3, 1, 1)),
                 ],
                 dim=2,
             )  # [3, H, 3W]
-            torchvision.utils.save_image(brdf_map, os.path.join(pbr_path, f"{idx:05d}_brdf.png"))
-            torchvision.utils.save_image(render_rgb, os.path.join(pbr_path, f"{idx:05d}.png"))
+            torchvision.utils.save_image(brdf_map, os.path.join(pbr_path, f"{idx:05d}_app_albedo_roug_met_ao.png"))
+            # torchvision.utils.save_image(render_rgb, os.path.join(pbr_path, f"{idx:05d}.png"))
 
             psnr_avg += get_psnr(gt_image, render_rgb).mean().double()
             ssim_avg += get_ssim(gt_image, render_rgb).mean().double()

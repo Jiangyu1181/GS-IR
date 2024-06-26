@@ -3,7 +3,6 @@ import sys
 import uuid
 from argparse import ArgumentParser, Namespace
 from random import randint
-from typing import Dict, List, Optional, Tuple, Union
 
 import kornia
 import numpy as np
@@ -11,30 +10,26 @@ import nvdiffrast.torch as dr
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
-from tqdm import tqdm, trange
+from gs_ir import recon_occlusion, IrradianceVolumes
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import trange
+from typing import Dict, List, Optional, Tuple, Union
 
 from arguments import GroupParams, ModelParams, OptimizationParams, PipelineParams
 from gaussian_renderer import render
-from gs_ir import recon_occlusion, IrradianceVolumes
 from pbr import CubemapLight, get_brdf_lut, pbr_shading
+from pbr.shade import get_material
 from scene import GaussianModel, Scene, Camera
 from utils.general_utils import safe_state
 from utils.image_utils import psnr, turbo_cmap
 from utils.loss_utils import l1_loss, ssim
 
-try:
-    from torch.utils.tensorboard import SummaryWriter
-
-    TENSORBOARD_FOUND = True
-except ImportError:
-    TENSORBOARD_FOUND = False
-
 
 def get_tv_loss(
-    gt_image: torch.Tensor,  # [3, H, W]
-    prediction: torch.Tensor,  # [C, H, W]
-    pad: int = 1,
-    step: int = 1,
+        gt_image: torch.Tensor,  # [3, H, W]
+        prediction: torch.Tensor,  # [C, H, W]
+        pad: int = 1,
+        step: int = 1,
 ) -> torch.Tensor:
     if pad > 1:
         gt_image = F.avg_pool2d(gt_image, pad, pad)
@@ -65,10 +60,10 @@ def get_tv_loss(
 
 
 def get_masked_tv_loss(
-    mask: torch.Tensor,  # [1, H, W]
-    gt_image: torch.Tensor,  # [3, H, W]
-    prediction: torch.Tensor,  # [C, H, W]
-    erosion: bool = False,
+        mask: torch.Tensor,  # [1, H, W]
+        gt_image: torch.Tensor,  # [3, H, W]
+        prediction: torch.Tensor,  # [C, H, W]
+        erosion: bool = False,
 ) -> torch.Tensor:
     rgb_grad_h = torch.exp(
         -(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)
@@ -107,8 +102,8 @@ def get_envmap_dirs(res: List[int] = [512, 1024]) -> torch.Tensor:
 
 
 def resize_tensorboard_img(
-    img: torch.Tensor,  # [C, H, W]
-    max_res: int = 800,
+        img: torch.Tensor,  # [C, H, W]
+        max_res: int = 800,
 ) -> torch.Tensor:
     _, H, W = img.shape
     ratio = min(max_res / H, max_res / W)
@@ -119,23 +114,23 @@ def resize_tensorboard_img(
 
 
 def training(
-    dataset: GroupParams,
-    opt: GroupParams,
-    pipe: GroupParams,
-    testing_iterations: List[int],
-    saving_iterations: List[int],
-    checkpoint_iterations: int,
-    checkpoint_path: Optional[str] = None,
-    pbr_iteration: int = 30_000,
-    debug_from: int = -1,
-    metallic: bool = False,
-    tone: bool = False,
-    gamma: bool = False,
-    normal_tv_weight: float = 1.0,
-    brdf_tv_weight: float = 1.0,
-    env_tv_weight: float = 0.01,
-    bound: float = 1.5,
-    indirect: bool = False,
+        dataset: GroupParams,
+        opt: GroupParams,
+        pipe: GroupParams,
+        testing_iterations: List[int],
+        saving_iterations: List[int],
+        checkpoint_iterations: int,
+        checkpoint_path: Optional[str] = None,
+        pbr_iteration: int = 30_000,
+        debug_from: int = -1,
+        metallic: bool = False,
+        tone: bool = False,
+        gamma: bool = False,
+        normal_tv_weight: float = 1.0,
+        brdf_tv_weight: float = 1.0,
+        env_tv_weight: float = 0.01,
+        bound: float = 1.5,
+        indirect: bool = False,
 ) -> None:
     first_iter = 0
     gaussians = GaussianModel(dataset.sh_degree)
@@ -153,7 +148,7 @@ def training(
     brdf_lut = get_brdf_lut().cuda()
     envmap_dirs = get_envmap_dirs()
     cubemap = CubemapLight(base_res=256).cuda()
-    cubemap.train()
+    cubemap.train()  #
     aabb = torch.tensor([-bound, -bound, -bound, bound, bound, bound]).cuda()
     irradiance_volumes = IrradianceVolumes(aabb=aabb).cuda()
     irradiance_volumes.train()
@@ -163,7 +158,10 @@ def training(
             "params": irradiance_volumes.parameters(),
             "lr": opt.opacity_lr,
         },
-        {"name": "cubemap", "params": cubemap.parameters(), "lr": opt.opacity_lr},
+        {
+            "name": "cubemap", "params": cubemap.parameters(),
+            "lr": opt.opacity_lr
+        },
     ]
     light_optimizer = torch.optim.Adam(param_groups, lr=opt.opacity_lr)
 
@@ -221,6 +219,8 @@ def training(
             background = bg
         else:  # NOTE: black background for PBR
             background = torch.zeros_like(bg)
+
+        # 高斯光栅化得到的结果, 高斯光栅化得到单幅材质贴图，再对贴图进行PBR渲染，这样的话原始图像的分辨率会影响渲染显存的占用
         rendering_result = render(
             viewpoint_camera=viewpoint_cam,
             pc=gaussians,
@@ -228,7 +228,7 @@ def training(
             bg_color=background,
             derive_normal=True,
         )
-        image = rendering_result["render"]  # [3, H, W]
+        image = rendering_result["render"]  # [3, H, W]  高斯光栅化渲染的结果
         viewspace_point_tensor = rendering_result["viewspace_points"]
         visibility_filter = rendering_result["visibility_filter"]
         radii = rendering_result["radii"]
@@ -236,19 +236,19 @@ def training(
         normal_map_from_depth = rendering_result["normal_map_from_depth"]  # [3, H, W]
         normal_map = rendering_result["normal_map"]  # [3, H, W]
         albedo_map = rendering_result["albedo_map"]  # [3, H, W]
-        roughness_map = rendering_result["roughness_map"]  # [1, H, W]
-        metallic_map = rendering_result["metallic_map"]  # [1, H, W]
+        class_feature = rendering_result["roughness_map"]  # [1, H, W]  class_feature
+        class_mask = rendering_result["metallic_map"]  # [1, H, W]  class_mask
 
-        # formulate roughness
-        rmax, rmin = 1.0, 0.04
-        roughness_map = roughness_map * (rmax - rmin) + rmin
+        # # formulate roughness
+        # rmax, rmin = 1.0, 0.04
+        # roughness_map = roughness_map * (rmax - rmin) + rmin
 
         # NOTE: mask normal map by view direction to avoid skip value
         H, W = viewpoint_cam.image_height, viewpoint_cam.image_width
         view_dirs = -(
             (F.normalize(canonical_rays[:, None, :], p=2, dim=-1) * c2w[None, :3, :3])  # [HW, 3, 3]
-            .sum(dim=-1)
-            .reshape(H, W, 3)
+                .sum(dim=-1)
+                .reshape(H, W, 3)
         )  # [H, W, 3]
 
         # Loss
@@ -259,6 +259,8 @@ def training(
         Ll1 = F.l1_loss(image, gt_image)
         normal_loss = 0.0
         if iteration <= pbr_iteration:
+            # 原始高斯的的渲染损失，虽然此时也有PBR材质的高斯球，但没有用loss进行约束，
+            # TODO 存在疑问：如果一开始就使用PBR进行约束的话是不是更好？以及下一步的bake必须要在原始高斯之后吗？
             loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
             # normal loss
             normal_loss_weight = 1.0
@@ -268,7 +270,7 @@ def training(
             normal_tv_loss = get_tv_loss(gt_image, normal_map, pad=1, step=1)
             loss += normal_tv_loss * normal_tv_weight
 
-        else:  # NOTE: PBR
+        else:  # NOTE: PBR， 原始高斯训练完后，此时的继续训练则是用PBR渲染进行约束，并且此时不使用原始高斯的光栅化渲染损失
             if occlusion_flag and indirect:
                 filepath = os.path.join(os.path.dirname(checkpoint_path), "occlusion_volumes.pth")
                 print(f"begin to load occlusion volumes from {filepath}")
@@ -282,9 +284,8 @@ def training(
             # recon occlusion
             if indirect:
                 points = (
-                    (-view_dirs.reshape(-1, 3) * depth_map.reshape(-1, 1) + c2w[:3, 3])
-                    .clamp(min=-bound, max=bound)
-                    .contiguous()
+                    (-view_dirs.reshape(-1, 3) * depth_map.reshape(-1, 1) + c2w[:3, 3]).clamp(
+                        min=-bound, max=bound).contiguous()
                 )  # [HW, 3]
                 occlusion = recon_occlusion(
                     H=H,
@@ -302,12 +303,20 @@ def training(
                     normals=normal_map.permute(1, 2, 0).reshape(-1, 3).contiguous(),
                 ).reshape(H, W, -1)
             else:
-                occlusion = torch.ones_like(roughness_map).permute(1, 2, 0)  # [H, W, 1]
-                irradiance = torch.zeros_like(roughness_map).permute(1, 2, 0)  # [H, W, 1]
+                occlusion = torch.ones_like(class_feature).permute(1, 2, 0)  # [H, W, 1]
+                irradiance = torch.zeros_like(class_feature).permute(1, 2, 0)  # [H, W, 1]
 
             normal_mask = rendering_result["normal_mask"]  # [1, H, W]
-            cubemap.build_mips() # build mip for environment light
-            pbr_result = pbr_shading(
+            cubemap.build_mips()  # build mip for environment light
+
+            assert metallic is not None
+            roughness_map, specular_albedo, metallic_map = get_material(
+                class_feature=class_feature.permute(1, 2, 0),  # [1, H, W] -> [H, W, 1]
+                class_mask=class_mask.permute(1, 2, 0),  # [1, H, W] -> [H, W, 1]
+                height=H,
+                width=W
+            )
+            pbr_result = pbr_shading(  # 最核心loss还是PBR rendering loss
                 light=cubemap,
                 normals=normal_map.permute(1, 2, 0).detach(),  # [H, W, 3]
                 view_dirs=view_dirs,
@@ -315,6 +324,7 @@ def training(
                 albedo=albedo_map.permute(1, 2, 0),  # [H, W, 3]
                 roughness=roughness_map.permute(1, 2, 0),  # [H, W, 1]
                 metallic=metallic_map.permute(1, 2, 0) if metallic else None,  # [H, W, 1]
+                specular_albedo=specular_albedo.permute(1, 2, 0),
                 tone=tone,
                 gamma=gamma,
                 occlusion=occlusion,
@@ -330,24 +340,31 @@ def training(
             pbr_render_loss = l1_loss(render_rgb, gt_image)
             loss = pbr_render_loss
 
-            ### BRDF loss
+            ## BRDF loss
             if (normal_mask == 0).sum() > 0:
                 brdf_tv_loss = get_masked_tv_loss(
                     normal_mask,
                     gt_image,  # [3, H, W]
-                    torch.cat([albedo_map, roughness_map, metallic_map], dim=0),  # [5, H, W]
+                    # albedo_map,
+                    torch.cat([albedo_map, class_feature, class_mask], dim=0),
+                    # torch.cat([albedo_map, roughness_map, specular_albedo, metallic_map], dim=0),  # [6, H, W]
                 )
             else:
                 brdf_tv_loss = get_tv_loss(
                     gt_image,  # [3, H, W]
-                    torch.cat([albedo_map, roughness_map, metallic_map], dim=0),  # [5, H, W]
+                    # albedo_map,
+                    torch.cat([albedo_map, class_feature, class_mask], dim=0),
+                    # torch.cat([albedo_map, roughness_map, specular_albedo, metallic_map], dim=0),  # [6, H, W]
                     pad=1,  # FIXME: 8 for scene
                     step=1,
                 )
             loss += brdf_tv_loss * brdf_tv_weight
-            lamb_weight = 0.001
-            lamb_loss = (1.0 - roughness_map[normal_mask]).mean() + metallic_map[normal_mask].mean()
-            loss += lamb_loss * lamb_weight
+
+            # lamb_weight = 0.001
+            # lamb_loss = (1.0 - roughness_map[normal_mask]).mean() + \
+            #             metallic_map[normal_mask].mean() + \
+            #             specular_albedo[normal_mask].mean()
+            # loss += lamb_loss * lamb_weight  # todo 这个损失有啥用？
 
             #### envmap
             # TV smoothness
@@ -413,8 +430,8 @@ def training(
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
                 if (
-                    iteration > opt.densify_from_iter
-                    and iteration % opt.densification_interval == 0
+                        iteration > opt.densify_from_iter
+                        and iteration % opt.densification_interval == 0
                 ):
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(
@@ -422,7 +439,7 @@ def training(
                     )
 
                 if iteration % opt.opacity_reset_interval == 0 or (
-                    dataset.white_background and iteration == opt.densify_from_iter
+                        dataset.white_background and iteration == opt.densify_from_iter
                 ):
                     gaussians.reset_opacity()
 
@@ -431,7 +448,7 @@ def training(
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none=True)
                 gaussians.update_learning_rate(iteration)
-                if iteration >= pbr_iteration:
+                if iteration >= pbr_iteration:  # 只有PBR阶段才会训练光照部分
                     light_optimizer.step()
                     light_optimizer.zero_grad(set_to_none=True)
                     cubemap.clamp_(min=0.0)
@@ -465,34 +482,30 @@ def prepare_output_and_logger(args: GroupParams) -> Optional[SummaryWriter]:
         cfg_log_f.write(str(Namespace(**vars(args))))
 
     # Create Tensorboard writer
-    tb_writer = None
-    if TENSORBOARD_FOUND:
-        tb_writer = SummaryWriter(args.model_path)
-    else:
-        print("Tensorboard not available: not logging progress")
+    tb_writer = SummaryWriter(args.model_path)
     return tb_writer
 
 
 def training_report(
-    tb_writer: Optional[SummaryWriter],
-    iteration: int,
-    Ll1: Union[float, torch.Tensor],
-    normal_loss: Union[float, torch.Tensor],
-    loss: Union[float, torch.Tensor],
-    elapsed: float,
-    testing_iterations: List[int],
-    scene: Scene,
-    light: CubemapLight,
-    brdf_lut: torch.Tensor,
-    canonical_rays: torch.Tensor,
-    pbr_iteration: int,
-    metallic: bool,
-    tone: bool,
-    gamma: bool,
-    renderArgs: Tuple[GroupParams, torch.Tensor],
-    occlusion_volumes: Dict,
-    irradiance_volumes: IrradianceVolumes,
-    indirect: bool = False,
+        tb_writer: Optional[SummaryWriter],
+        iteration: int,
+        Ll1: Union[float, torch.Tensor],
+        normal_loss: Union[float, torch.Tensor],
+        loss: Union[float, torch.Tensor],
+        elapsed: float,
+        testing_iterations: List[int],
+        scene: Scene,
+        light: CubemapLight,
+        brdf_lut: torch.Tensor,
+        canonical_rays: torch.Tensor,
+        pbr_iteration: int,
+        metallic: bool,
+        tone: bool,
+        gamma: bool,
+        renderArgs: Tuple[GroupParams, torch.Tensor],
+        occlusion_volumes: Dict,
+        irradiance_volumes: IrradianceVolumes,
+        indirect: bool = False,
 ) -> None:
     if tb_writer:
         tb_writer.add_scalar("train_loss_patches/l1_loss", Ll1, iteration)
@@ -543,8 +556,8 @@ def training_report(
                         torch.from_numpy(
                             turbo_cmap(render_result["depth_map"].cpu().numpy().squeeze())
                         )
-                        .to(image.device)
-                        .permute(2, 0, 1)
+                            .to(image.device)
+                            .permute(2, 0, 1)
                     )
                     normal_map_from_depth = render_result["normal_map_from_depth"]
                     normal_map = render_result["normal_map"]
@@ -553,8 +566,18 @@ def training_report(
                     alpha_mask = viewpoint.gt_alpha_mask.cuda()
                     gt_image = (gt_image * alpha_mask + background[:, None, None] * (1.0 - alpha_mask)).clamp(0.0, 1.0)
                     albedo_map = render_result["albedo_map"]  # [3, H, W]
-                    roughness_map = render_result["roughness_map"]  # [1, H, W]
-                    metallic_map = render_result["metallic_map"]  # [1, H, W]
+                    class_feature = render_result["roughness_map"]  # [1, H, W]
+                    class_mask = render_result["metallic_map"]  # [1, H, W]
+
+                    H, W = viewpoint.image_height, viewpoint.image_width
+                    assert metallic is not None
+                    roughness_map, specular_albedo, metallic_map = get_material(
+                        class_feature=class_feature.permute(1, 2, 0),  # [1, H, W] -> [H, W, 1]
+                        class_mask=class_mask.permute(1, 2, 0),  # [1, H, W] -> [H, W, 1]
+                        height=H,
+                        width=W
+                    )
+
                     brdf_map = torch.cat(
                         [
                             albedo_map,
@@ -565,15 +588,15 @@ def training_report(
                     )  # [3, H, 3W]
                     # NOTE: PBR record
                     if iteration > pbr_iteration:
-                        H, W = viewpoint.image_height, viewpoint.image_width
+
                         c2w = torch.inverse(viewpoint.world_view_transform.T)  # [4, 4]
                         view_dirs = -(
                             (
-                                F.normalize(canonical_rays[:, None, :], p=2, dim=-1)
-                                * c2w[None, :3, :3]
+                                    F.normalize(canonical_rays[:, None, :], p=2, dim=-1)
+                                    * c2w[None, :3, :3]
                             )  # [HW, 3, 3]
-                            .sum(dim=-1)
-                            .reshape(H, W, 3)
+                                .sum(dim=-1)
+                                .reshape(H, W, 3)
                         )  # [H, W, 3]
                         normal_mask = render_result["normal_mask"]
 
@@ -581,8 +604,8 @@ def training_report(
                         if indirect:
                             points = (
                                 (-view_dirs.reshape(-1, 3) * depth_map.reshape(-1, 1) + c2w[:3, 3])
-                                .clamp(min=-bound, max=bound)
-                                .contiguous()
+                                    .clamp(min=-bound, max=bound)
+                                    .contiguous()
                             )  # [HW, 3]
                             occlusion = recon_occlusion(
                                 H=H,
@@ -614,9 +637,8 @@ def training_report(
                             mask=normal_mask.permute(1, 2, 0),  # [H, W, 1]
                             albedo=albedo_map.permute(1, 2, 0),  # [H, W, 3]
                             roughness=roughness_map.permute(1, 2, 0),  # [H, W, 1]
-                            metallic=metallic_map.permute(1, 2, 0)
-                            if metallic
-                            else None,  # [H, W, 1]
+                            metallic=metallic_map.permute(1, 2, 0) if metallic else None,  # [H, W, 1]
+                            specular_albedo=specular_albedo.permute(1, 2, 0),
                             tone=tone,
                             gamma=gamma,
                             brdf_lut=brdf_lut,
@@ -729,6 +751,7 @@ if __name__ == "__main__":
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
+
     parser.add_argument("--ip", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=6009)
     parser.add_argument("--debug_from", type=int, default=-1)
@@ -748,15 +771,20 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--start_checkpoint", type=str, default=None, help="The path to the checkpoint to load.")
-    parser.add_argument("--pbr_iteration", default=30_000, type=int, help="The iteration to begin the pb.r learning (Deomposition Stage in the paper)")
+    parser.add_argument("--pbr_iteration", default=30_000, type=int,
+                        help="The iteration to begin the pb.r learning (Deomposition Stage in the paper)")
     parser.add_argument("--normal_tv", default=5.0, type=float, help="The weight of TV loss on predicted normal map.")
-    parser.add_argument("--brdf_tv", default=1.0, type=float, help="The weight of TV loss on predicted BRDF (material) map.")
+    parser.add_argument("--brdf_tv", default=1.0, type=float,
+                        help="The weight of TV loss on predicted BRDF (material) map.")
     parser.add_argument("--env_tv", default=0.01, type=float, help="The weight of TV loss on Environment Map.")
     parser.add_argument("--bound", default=1.5, type=float, help="The valid bound of occlusion volumes.")
     parser.add_argument("--tone", action="store_true", help="Enable aces film tone mapping.")
     parser.add_argument("--gamma", action="store_true", help="Enable linear_to_sRGB for gamma correction.")
     parser.add_argument("--metallic", action="store_true", help="Enable metallic material reconstruction.")
     parser.add_argument("--indirect", action="store_true", help="Enable indirect diffuse modeling.")
+
+    # parser.add_argument("--indirect", action="store_true", help="Enable indirect diffuse modeling.")
+    # a = sys.argv[1:]
     args = parser.parse_args(sys.argv[1:])
     args.test_iterations.append(args.iterations)
     args.save_iterations.append(args.iterations)

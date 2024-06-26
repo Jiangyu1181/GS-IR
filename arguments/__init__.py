@@ -52,8 +52,9 @@ class ParamGroup:
 class ModelParams(ParamGroup):
     def __init__(self, parser: ArgumentParser, sentinel=False) -> None:
         self.sh_degree = 3
-        self._source_path = ""
-        self._model_path = ""
+        self._source_path = "/mnt/jy_nas/Dataset/openBuildingBRDF/"
+        self._model_path = "/mnt/jy_nas/CodeOutput/building_GSIS_original/"
+        # self._model_path = "/mnt/data2/jy/building_GSIS_original"
         self._images = "images"
         self._resolution = -1
         self._white_background = False

@@ -14,6 +14,7 @@ from tqdm import tqdm
 from arguments import GroupParams, ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel, render
 from pbr import CubemapLight, get_brdf_lut, pbr_shading
+from pbr.shade import get_material
 from scene import Scene
 from utils.general_utils import safe_state
 from utils.image_utils import viridis_cmap
@@ -138,8 +139,16 @@ def render_set(
         alpha_mask = view.gt_alpha_mask.cuda()
 
         albedo_map = rendering_result["albedo_map"]  # [3, H, W]
-        roughness_map = rendering_result["roughness_map"]  # [1, H, W]
-        metallic_map = rendering_result["metallic_map"]  # [1, H, W]
+        class_feature = rendering_result["roughness_map"]  # [1, H, W]
+        class_mask = rendering_result["metallic_map"]  # [1, H, W]
+        assert metallic is not None
+        roughness_map, specular_albedo, metallic_map = get_material(
+            class_feature=class_feature.permute(1, 2, 0),  # [1, H, W] -> [H, W, 1]
+            class_mask=class_mask.permute(1, 2, 0),  # [1, H, W] -> [H, W, 1]
+            height=H,
+            width=W
+        )
+
         pbr_result = pbr_shading(
             light=light,
             normals=normal_map.permute(1, 2, 0),  # [H, W, 3]
@@ -148,6 +157,7 @@ def render_set(
             albedo=albedo_map.permute(1, 2, 0),  # [H, W, 3]
             roughness=roughness_map.permute(1, 2, 0),  # [H, W, 1]
             metallic=metallic_map.permute(1, 2, 0) if metallic else None,  # [H, W, 1]
+            specular_albedo=specular_albedo.permute(1, 2, 0),
             tone=tone,
             gamma=gamma,
             brdf_lut=brdf_lut,

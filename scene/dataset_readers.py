@@ -12,12 +12,11 @@
 import json
 import os
 import sys
-from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
 from PIL import Image
 from plyfile import PlyData, PlyElement
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from scene.colmap_loader import (
     qvec2rotmat,
@@ -79,7 +78,7 @@ def getNerfppNorm(cam_info: List[CameraInfo]) -> Dict:
 
 
 def readColmapCameras(
-    cam_extrinsics: Dict, cam_intrinsics: Dict, images_folder: str
+        cam_extrinsics: Dict, cam_intrinsics: Dict, images_folder: str
 ) -> List[CameraInfo]:
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
@@ -222,7 +221,7 @@ def readColmapSceneInfo(path: str, images: str, eval: bool, llffhold: int = 8) -
 
 
 def readCamerasFromTransforms(
-    path: str, transformsfile: str, white_background: bool, extension: str = ".png"
+        path: str, transformsfile: str, white_background: bool, extension: str = ".png"
 ) -> List[CameraInfo]:
     cam_infos = []
 
@@ -232,8 +231,6 @@ def readCamerasFromTransforms(
     fovx = contents["camera_angle_x"]
     frames = contents["frames"]
     for idx, frame in enumerate(frames):
-        cam_name = os.path.join(path, frame["file_path"] + extension)
-
         # NeRF 'transform_matrix' is a camera-to-world transform
         c2w = np.array(frame["transform_matrix"])
         # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
@@ -244,10 +241,11 @@ def readCamerasFromTransforms(
         R = np.transpose(w2c[:3, :3])  # R is stored transposed due to 'glm' in CUDA code
         T = w2c[:3, 3]
 
-        image_path = os.path.join(path, cam_name)
-        image_name = Path(cam_name).stem
+        pattern = 'train' if 'train' in frame["file_name"] else 'test'
+        image_path = os.path.join(path, pattern, 'appearance', frame["file_name"] + extension)
+        image_name = frame["file_name"]
         image = Image.open(image_path)
-
+        image = image.convert("RGB")  # ignore alpha channel
         # im_data = np.array(image.convert("RGBA"))
 
         # bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
@@ -279,7 +277,7 @@ def readCamerasFromTransforms(
 
 
 def readNerfSyntheticInfo(
-    path: str, white_background: bool, eval: bool, extension: str = ".png"
+        path: str, white_background: bool, eval: bool, extension: str = ".png"
 ) -> SceneInfo:
     print("Reading Training Transforms")
     train_cam_infos = readCamerasFromTransforms(

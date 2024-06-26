@@ -1,18 +1,17 @@
-import os
+# import imageio.v2 as imageio
 import itertools
 import math
-from argparse import ArgumentParser
-from os import makedirs
-from typing import Dict, List, Tuple
-
-import imageio.v2 as imageio
 import numpy as np
 import nvdiffrast.torch as dr
+import os
 import torch
 import torch.nn.functional as F
-from tqdm import trange
+from argparse import ArgumentParser
 from diff_gaussian_rasterization import _C
 from gs_ir import _C as gs_ir_ext
+from os import makedirs
+from tqdm import trange
+from typing import Dict, List, Tuple
 
 from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
@@ -26,6 +25,7 @@ def getWorld2ViewTorch(R: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
     Rt[:3, 3] = t
     Rt[3, 3] = 1.0
     return Rt
+
 
 # inverse the mapping from https://github.com/NVlabs/nvdiffrec/blob/dad3249af8ede96c7dd72c30328272117fabb710/render/light.py#L22
 def get_envmap_dirs(res: List[int] = [256, 512]) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -98,14 +98,22 @@ MIN_DEPTH = 1e-6
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Testing script parameters")
-    model = ModelParams(parser, sentinel=True)
+    # model = ModelParams(parser, sentinel=True)
+    model = ModelParams(parser)
     pipeline = PipelineParams(parser)
+
     parser.add_argument("--bound", default=1.5, type=float, help="The bound of occlusion volumes.")
-    parser.add_argument("--valid", default=1.5, type=float, help="Identify valid area (cull invalid 3D Gaussians) to accelerate baking.")
-    parser.add_argument("--occlu_res", default=160, type=int, help="The resolution of the baked occlusion volumes.")
-    parser.add_argument("--cubemap_res", default=256, type=int, help="The resolution of the cubemap produced during baking.")
-    parser.add_argument("--occlusion", default=0.4, type=float, help="The occlusion threshold to control visible area, the smaller the bound, the lighter the ambient occlusion.")
-    parser.add_argument("--checkpoint", type=str, default=None, help="The path to the checkpoint to load.")
+    parser.add_argument("--valid", default=1.5, type=float,
+                        help="Identify valid area (cull invalid 3D Gaussians) to accelerate baking.")
+    parser.add_argument("--occlu_res", default=128, type=int, help="The resolution of the baked occlusion volumes.")
+    parser.add_argument("--cubemap_res", default=256, type=int,
+                        help="The resolution of the cubemap produced during baking.")
+    parser.add_argument("--occlusion", default=0.25, type=float,
+                        help="The occlusion threshold to control visible area, the smaller the bound, the lighter the ambient occlusion.")
+    parser.add_argument("--checkpoint", type=str,
+                        # default=None,
+                        default="/mnt/data2/jy/building_GSIS_original/chkpnt30000.pth",
+                        help="The path to the checkpoint to load.")
     args = get_combined_args(parser)
 
     model_path = os.path.dirname(args.checkpoint)
@@ -154,7 +162,8 @@ if __name__ == "__main__":
                 [-1.0, 0.0, 0.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
-        ).cuda(),  # lookAt(torch.tensor([0, 0, 0]), torch.tensor([-1.0, 0.0, 0.0]), torch.tensor([0.0, -1.0, 0.0]))  [eye, center, up]
+        ).cuda(),
+        # lookAt(torch.tensor([0, 0, 0]), torch.tensor([-1.0, 0.0, 0.0]), torch.tensor([0.0, -1.0, 0.0]))  [eye, center, up]
         torch.tensor(
             [
                 [0.0, 0.0, -1.0, 0.0],
@@ -162,7 +171,8 @@ if __name__ == "__main__":
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
-        ).cuda(),  # lookAt(torch.tensor([0, 0, 0]), torch.tensor([1.0, 0.0, 0.0]), torch.tensor([0.0, -1.0, 0.0]))  [eye, center, up]
+        ).cuda(),
+        # lookAt(torch.tensor([0, 0, 0]), torch.tensor([1.0, 0.0, 0.0]), torch.tensor([0.0, -1.0, 0.0]))  [eye, center, up]
         torch.tensor(
             [
                 [1.0, 0.0, 0.0, 0.0],
@@ -170,7 +180,8 @@ if __name__ == "__main__":
                 [0.0, 1.0, 0.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
-        ).cuda(),  # lookAt(torch.tensor([0, 0, 0]), torch.tensor([0.0, -1.0, 0.0]), torch.tensor([0.0, 0.0, -1.0]))  [eye, center, up]
+        ).cuda(),
+        # lookAt(torch.tensor([0, 0, 0]), torch.tensor([0.0, -1.0, 0.0]), torch.tensor([0.0, 0.0, -1.0]))  [eye, center, up]
         torch.tensor(
             [
                 [1.0, 0.0, 0.0, 0.0],
@@ -178,7 +189,8 @@ if __name__ == "__main__":
                 [0.0, -1.0, 0.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
-        ).cuda(),  # lookAt(torch.tensor([0, 0, 0]), torch.tensor([0.0, 1.0, 0.0]), torch.tensor([0.0, 0.0, 1.0]))  [eye, center, up]
+        ).cuda(),
+        # lookAt(torch.tensor([0, 0, 0]), torch.tensor([0.0, 1.0, 0.0]), torch.tensor([0.0, 0.0, 1.0]))  [eye, center, up]
         torch.tensor(
             [
                 [1.0, 0.0, 0.0, 0.0],
@@ -186,7 +198,8 @@ if __name__ == "__main__":
                 [0.0, 0.0, 1.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
-        ).cuda(),  # lookAt(torch.tensor([0, 0, 0]), torch.tensor([0.0, 0.0, -1.0]), torch.tensor([0.0, 1.0, 0.0]))  [eye, center, up]
+        ).cuda(),
+        # lookAt(torch.tensor([0, 0, 0]), torch.tensor([0.0, 0.0, -1.0]), torch.tensor([0.0, 1.0, 0.0]))  [eye, center, up]
         torch.tensor(
             [
                 [-1.0, 0.0, 0.0, 0.0],
@@ -194,15 +207,16 @@ if __name__ == "__main__":
                 [0.0, 0.0, -1.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
-        ).cuda(),  # lookAt(torch.tensor([0, 0, 0]), torch.tensor([0.0, 0.0, 1.0]), torch.tensor([0.0, -1.0, 0.0]))  [eye, center, up]
+        ).cuda(),
+        # lookAt(torch.tensor([0, 0, 0]), torch.tensor([0.0, 0.0, 1.0]), torch.tensor([0.0, -1.0, 0.0]))  [eye, center, up]
     ]
 
     zfar = 100.0
     znear = 0.01
     projection_matrix = (
         getProjectionMatrix(znear=znear, zfar=zfar, fovX=math.pi * 0.5, fovY=math.pi * 0.5)
-        .transpose(0, 1)
-        .cuda()
+            .transpose(0, 1)
+            .cuda()
     )
 
     # positions = torch.ones([1, 3]).cuda()
@@ -218,7 +232,8 @@ if __name__ == "__main__":
     occlusion_threshold = args.occlusion
     valid_mask = torch.zeros([args.occlu_res, args.occlu_res, args.occlu_res]).bool().cuda()
     points = gaussians.get_xyz
-    quat = ((points - aabb_min) // grid).long()
+    # quat = ((points - aabb_min) // grid).long()
+    quat = torch.div((points - aabb_min), grid, rounding_mode='trunc').long()  # edited by jy
     qx0, qx1 = quat[..., 0].clamp(min=0, max=args.occlu_res - 1), (quat[..., 0] + 1).clamp(
         min=0, max=args.occlu_res - 1
     )
@@ -239,29 +254,29 @@ if __name__ == "__main__":
     xyz_ids = torch.where(valid_mask)
     num_grid = valid_mask.sum()
     occlusion_ids = (
-        torch.ones(
-            [args.occlu_res, args.occlu_res, args.occlu_res],
-            dtype=torch.int32,
-        )
-        * -1
+            torch.ones(
+                [args.occlu_res, args.occlu_res, args.occlu_res],
+                dtype=torch.int32,
+            )
+            * -1
     ).cuda()
     occlusion_ids[xyz_ids[0].tolist(), xyz_ids[1].tolist(), xyz_ids[2].tolist()] = torch.arange(
         num_grid, dtype=torch.int32
     ).cuda()
     occlusion_coefficients = torch.zeros(
-        [num_grid, occlu_sh_degree**2, 1], dtype=torch.float32
+        [num_grid, occlu_sh_degree ** 2, 1], dtype=torch.float32
     ).cuda()
 
-    render_path = os.path.join(model_path, "temp")
-
-    makedirs(render_path, exist_ok=True)
+    # render_path = os.path.join(model_path, "temp")
+    #
+    # makedirs(render_path, exist_ok=True)
 
     # prepare
     screenspace_points = (
-        torch.zeros_like(
-            gaussians.get_xyz, dtype=gaussians.get_xyz.dtype, requires_grad=False, device="cuda"
-        )
-        + 0
+            torch.zeros_like(
+                gaussians.get_xyz, dtype=gaussians.get_xyz.dtype, requires_grad=False, device="cuda"
+            )
+            + 0
     )
     means3D = gaussians.get_xyz
     means2D = screenspace_points
@@ -283,7 +298,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         for grid_id in trange(num_grid):
             quat = torch.cat(torch.where(occlusion_ids == grid_id))
-            position = positions[(quat[0] * args.occlu_res**2 + quat[1] * args.occlu_res + quat[2],)]
+            position = positions[(quat[0] * args.occlu_res ** 2 + quat[1] * args.occlu_res + quat[2],)]
             # position = torch.tensor([0.0, 1.5, 0.0]).to(position.device)
             rgb_cubemap = []
             opacity_cubemap = []
@@ -373,4 +388,3 @@ if __name__ == "__main__":
         save_file,
     )
     print(f"save occlusion volumes as {save_file}")
-
